@@ -905,13 +905,17 @@ public final class MultiThreadedEventLoopGroup: EventLoopGroup {
         initializer(thread)
 
         do {
+            // mxy selectorFactory = NIO.Selector<NIORegistration>.init
+            // 创建
             let loop = SelectableEventLoop(thread: thread,
                                            selector: try selectorFactory(),
                                            canBeShutdownIndividually: canEventLoopBeShutdownIndividually)
+            // mxy threadSpecificEventLoop 是类属性，一般情况下共享同一个变量，这里需要看一下 ThreadSpecificVariable.currentValue 的实现，底层是调用的C方法 绑定在了线程上
             threadSpecificEventLoop.currentValue = loop
             defer {
                 threadSpecificEventLoop.currentValue = nil
             }
+            // mxy 返回给初始化时候的 map
             callback(loop)
             try loop.run()
         } catch {
@@ -932,7 +936,9 @@ public final class MultiThreadedEventLoopGroup: EventLoopGroup {
         var _loop: SelectableEventLoop! = nil
 
         loopUpAndRunningGroup.enter()
+        // mxy 创建线程 成功后调用回调
         NIOThread.spawnAndRun(name: name, detachThread: false) { t in
+            // mxy 创建EventLoop 并运行
             MultiThreadedEventLoopGroup.runTheLoop(thread: t,
                                                    canEventLoopBeShutdownIndividually: false, // part of MTELG
                                                    selectorFactory: selectorFactory,

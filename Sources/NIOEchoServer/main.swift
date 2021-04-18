@@ -36,7 +36,7 @@ private final class EchoHandler: ChannelInboundHandler {
         context.close(promise: nil)
     }
 }
-let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 let bootstrap = ServerBootstrap(group: group)
     // Specify backlog and enable SO_REUSEADDR for the server itself
     .serverChannelOption(ChannelOptions.backlog, value: 256)
