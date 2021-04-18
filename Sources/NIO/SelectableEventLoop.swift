@@ -267,6 +267,7 @@ internal final class SelectableEventLoop: EventLoop {
         // nothing we can do if we fail enqueuing here.
         try? self._schedule0(ScheduledTask(task, { error in
             // do nothing
+            print("mxy test 任务执行")
         }, .now()))
     }
 
@@ -405,6 +406,7 @@ internal final class SelectableEventLoop: EventLoop {
             // Block until there are events to handle or the selector was woken up
             /* for macOS: in case any calls we make to Foundation put objects into an autoreleasepool */
             try withAutoReleasePool {
+                // mxy 这个方法会调用系统的方法 阻塞当前线程并等待io事件触发
                 try self._selector.whenReady(strategy: currentSelectorStrategy(nextReadyTask: nextReadyTask)) { ev in
                     switch ev.registration {
                     case .serverSocketChannel(let chan, _, _):

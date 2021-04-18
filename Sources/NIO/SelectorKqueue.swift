@@ -129,6 +129,29 @@ extension Selector: _SelectorBackendProtocol {
             // nothing to do
             return
         }
+        // mxy
+        keventBuffer.map { (event) -> Void in
+          var s = ""
+          var flags = ""
+          if event.filter == EVFILT_READ {
+            s = "EVFILT_READ"
+          } else if event.filter == EVFILT_WRITE {
+            s = "EVFILT_WRITE"
+          } else if event.filter == EVFILT_USER {
+            s = "EVFILT_USER"
+          }
+          
+          if event.flags == EV_ADD {
+            flags = "EV_ADD"
+          } else if event.flags == EV_DELETE {
+            flags = "EV_DELETE"
+          } else if event.flags == EV_ENABLE {
+            flags = "EV_ENABLE"
+          } else if event.flags == EV_CLEAR {
+            flags = "EV_CLEAR"
+          }
+          print("mxy----- 注册监听 \(s) \(flags) \(event)")
+        }
         do {
             try KQueue.kevent(kq: self.selectorFD,
                               changelist: keventBuffer.baseAddress!,
@@ -206,12 +229,14 @@ extension Selector: _SelectorBackendProtocol {
 
         let timespec = Selector.toKQueueTimeSpec(strategy: strategy)
         let ready = try timespec.withUnsafeOptionalPointer { ts in
+            // mxy 调用内核函数 阻塞当前线程 等待关注的事件
             Int(try KQueue.kevent(kq: self.selectorFD, changelist: nil, nchanges: 0, eventlist: events, nevents: Int32(eventsCapacity), timeout: ts))
         }
 
         for i in 0..<ready {
             let ev = events[i]
             let filter = Int32(ev.filter)
+            print("mxy------ 获取到ready 事件 \(filter)")
             let eventSequenceIdentifier = UInt32(Int(bitPattern: ev.udata))
             guard Int32(ev.flags) & EV_ERROR == 0 else {
                 throw IOError(errnoCode: Int32(ev.data), reason: "kevent returned with EV_ERROR set: \(String(describing: ev))")
@@ -222,6 +247,7 @@ extension Selector: _SelectorBackendProtocol {
             guard eventSequenceIdentifier == registration.sequenceIdentifier else {
                 continue
             }
+            print("mxy------ 执行 ready 事件 \(filter)")
             var selectorEvent: SelectorEventSet = ._none
             switch filter {
             case EVFILT_READ:
@@ -287,7 +313,8 @@ extension Selector: _SelectorBackendProtocol {
                 var event = kevent()
                 event.ident = 0
                 event.filter = Int16(EVFILT_USER)
-                event.fflags = UInt32(NOTE_TRIGGER | NOTE_FFNOP)
+                print("mxy----- 触发 用户事件")
+                event.fflags = UInt32(NOTE_TRIGGER | NOTE_FFNOP) // mxy NOTE_TRIGGER 触发 EVFILT_USER event
                 event.data = 0
                 event.udata = nil
                 event.flags = 0

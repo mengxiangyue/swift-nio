@@ -211,6 +211,7 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
 
         let p = eventLoop.makePromise(of: Void.self)
         p.futureResult.map {
+            // mxy 注册启动时候的 EVFILT_READ event
             // It's important to call the methods before we actually notify the original promise for ordering reasons.
             self.becomeActive0(promise: promise)
         }.whenFailure{ error in

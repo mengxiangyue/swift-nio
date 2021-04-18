@@ -512,6 +512,7 @@ extension EventLoop {
         let promise: EventLoopPromise<T> = makePromise(file: #file, line: #line)
 
         self.execute {
+            print("mxy 提交 到EventLoop task 执行")
             do {
                 promise.succeed(try task())
             } catch let err {
