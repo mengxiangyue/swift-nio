@@ -428,6 +428,7 @@ internal final class SelectableEventLoop: EventLoop {
                 }
             }
 
+            // mxy 每次获取到取出已经ready 的 task 然后执行
             // We need to ensure we process all tasks, even if a task added another task again
             while true {
                 // TODO: Better locking
