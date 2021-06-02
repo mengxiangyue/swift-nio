@@ -28,9 +28,10 @@ class SelectorTest: XCTestCase {
 
     private func assertDeregisterWhileProcessingEvents(closeAfterDeregister: Bool) throws {
         struct TestRegistration: Registration {
-            var interested: SelectorEventSet
+
             let socket: Socket
-            var sequenceIdentifier: RegistrationSequenceIdentifier
+            var interested: SelectorEventSet
+            var registrationID: SelectorRegistrationID
         }
 
         let selector = try NIO.Selector<TestRegistration>()
@@ -73,16 +74,16 @@ class SelectorTest: XCTestCase {
         }
 
         // Register both sockets with .write. This will ensure both are ready when calling selector.whenReady.
-        try selector.register(selectable: socket1 , interested: [.reset, .write], makeRegistration: { ev in
-            TestRegistration(interested: ev, socket: socket1, sequenceIdentifier: 0)
+        try selector.register(selectable: socket1 , interested: [.reset, .write], makeRegistration: { ev, regID in
+            return TestRegistration(socket: socket1, interested: ev, registrationID: regID)
         })
 
-        try selector.register(selectable: socket2 , interested: [.reset, .write], makeRegistration: { ev in
-            TestRegistration(interested: ev, socket: socket2, sequenceIdentifier: 0)
+        try selector.register(selectable: socket2 , interested: [.reset, .write], makeRegistration: { ev, regID in
+            return TestRegistration(socket: socket2, interested: ev, registrationID: regID)
         })
 
         var readyCount = 0
-        try selector.whenReady(strategy: .block) { ev in
+        try selector.whenReady(strategy: .block, onLoopBegin: { }) { ev in
             readyCount += 1
             if socket1 === ev.registration.socket {
                 try selector.deregister(selectable: socket2)
