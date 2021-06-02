@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if !SWIFTNIO_USE_IO_URING
+
 #if os(Linux) || os(Android)
 
 /// Represents the `epoll` filters/events we might use:
@@ -93,6 +95,33 @@ extension SelectorEventSet {
     }
 }
 
+// EPollUserData supports (un)packing into an `UInt64` because epoll has a user info field that we can attach which is
+// up to 64 bits wide. We're using all of those 64 bits, 32 for a "registration ID" and 32 for the file descriptor.
+@usableFromInline struct EPollUserData {
+    @usableFromInline var registrationID: SelectorRegistrationID
+    @usableFromInline var fileDescriptor: CInt
+
+    @inlinable init(registrationID: SelectorRegistrationID, fileDescriptor: CInt) {
+        assert(MemoryLayout<UInt64>.size == MemoryLayout<EPollUserData>.size)
+        self.registrationID = registrationID
+        self.fileDescriptor = fileDescriptor
+    }
+
+    @inlinable init(rawValue: UInt64) {
+        let unpacked = IntegerBitPacking.unpackUInt32CInt(rawValue)
+        self = .init(registrationID: SelectorRegistrationID(rawValue: unpacked.0), fileDescriptor: unpacked.1)
+    }
+}
+
+extension UInt64 {
+    @inlinable
+    init(_ epollUserData: EPollUserData) {
+        let fd = epollUserData.fileDescriptor
+        assert(fd >= 0, "\(fd) is not a valid file descriptor")
+        self = IntegerBitPacking.packUInt32CInt(epollUserData.registrationID.rawValue, fd)
+    }
+}
+
 extension Selector: _SelectorBackendProtocol {
     func initialiseState0() throws {
         self.selectorFD = try Epoll.epoll_create(size: 128)
@@ -103,13 +132,15 @@ extension Selector: _SelectorBackendProtocol {
 
         var ev = Epoll.epoll_event()
         ev.events = SelectorEventSet.read.epollEventSet
-        ev.data.u64 = UInt64(self.eventFD)
+        ev.data.u64 = UInt64(EPollUserData(registrationID: .initialRegistrationID,
+                                           fileDescriptor: self.eventFD))
 
         try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_ADD, fd: self.eventFD, event: &ev)
 
         var timerev = Epoll.epoll_event()
         timerev.events = Epoll.EPOLLIN | Epoll.EPOLLERR | Epoll.EPOLLRDHUP
-        timerev.data.u64 = UInt64(self.timerFD)
+        timerev.data.u64 = UInt64(EPollUserData(registrationID: .initialRegistrationID,
+                                                fileDescriptor: self.timerFD))
         try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_ADD, fd: self.timerFD, event: &timerev)
     }
 
@@ -118,25 +149,32 @@ extension Selector: _SelectorBackendProtocol {
         assert(self.timerFD == -1, "self.timerFD == \(self.timerFD) in deinitAssertions0, forgot close?")
     }
 
-    func register0<S: Selectable>(selectable: S, fd: Int, interested: SelectorEventSet, sequenceIdentifier: RegistrationSequenceIdentifier) throws {
+    func register0<S: Selectable>(selectable: S,
+                                  fileDescriptor: CInt,
+                                  interested: SelectorEventSet,
+                                  registrationID: SelectorRegistrationID) throws {
         var ev = Epoll.epoll_event()
         ev.events = interested.epollEventSet
-        ev.data.u64 = UInt64(UInt64(sequenceIdentifier) << 32 + UInt64(fd)) // we put fd in lower 4 bytes to allow eventfd & timerfd to work as is
+        ev.data.u64 = UInt64(EPollUserData(registrationID: registrationID, fileDescriptor: fileDescriptor))
 
-        try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_ADD, fd: Int32(fd), event: &ev)
+        try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_ADD, fd: fileDescriptor, event: &ev)
     }
 
-    func reregister0<S: Selectable>(selectable: S, fd: Int, oldInterested: SelectorEventSet, newInterested: SelectorEventSet, sequenceIdentifier: RegistrationSequenceIdentifier) throws {
+    func reregister0<S: Selectable>(selectable: S,
+                                    fileDescriptor: CInt,
+                                    oldInterested: SelectorEventSet,
+                                    newInterested: SelectorEventSet,
+                                    registrationID: SelectorRegistrationID) throws {
         var ev = Epoll.epoll_event()
         ev.events = newInterested.epollEventSet
-        ev.data.u64 = UInt64(UInt64(sequenceIdentifier) << 32 + UInt64(fd))
+        ev.data.u64 = UInt64(EPollUserData(registrationID: registrationID, fileDescriptor: fileDescriptor))
 
-        _ = try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_MOD, fd: Int32(fd), event: &ev)
+        _ = try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_MOD, fd: fileDescriptor, event: &ev)
     }
 
-    func deregister0<S: Selectable>(selectable: S, fd: Int, oldInterested: SelectorEventSet, sequenceIdentifier: RegistrationSequenceIdentifier) throws {
+    func deregister0<S: Selectable>(selectable: S, fileDescriptor: CInt, oldInterested: SelectorEventSet, registrationID: SelectorRegistrationID) throws {
         var ev = Epoll.epoll_event()
-        _ = try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_DEL, fd: Int32(fd), event: &ev)
+        _ = try Epoll.epoll_ctl(epfd: self.selectorFD, op: Epoll.EPOLL_CTL_DEL, fd: fileDescriptor, event: &ev)
     }
     
     /// Apply the given `SelectorStrategy` and execute `body` once it's complete (which may produce `SelectorEvent`s to handle).
@@ -144,7 +182,7 @@ extension Selector: _SelectorBackendProtocol {
     /// - parameters:
     ///     - strategy: The `SelectorStrategy` to apply
     ///     - body: The function to execute for each `SelectorEvent` that was produced.
-    func whenReady0(strategy: SelectorStrategy, _ body: (SelectorEvent<R>) throws -> Void) throws -> Void {
+    func whenReady0(strategy: SelectorStrategy, onLoopBegin loopStart: () -> Void, _ body: (SelectorEvent<R>) throws -> Void) throws -> Void {
         assert(self.myThread == NIOThread.current)
         guard self.lifecycleState == .open else {
             throw IOError(errnoCode: EBADF, reason: "can't call whenReady for selector as it's \(self.lifecycleState).")
@@ -171,10 +209,13 @@ extension Selector: _SelectorBackendProtocol {
             ready = Int(try Epoll.epoll_wait(epfd: self.selectorFD, events: events, maxevents: Int32(eventsCapacity), timeout: -1))
         }
 
+        loopStart()
+
         for i in 0..<ready {
             let ev = events[i]
-            let fd = Int32(UInt64(ev.data.u64 & 0x00000000FFFFFFFF))
-            let eventSequenceIdentifier = UInt32(UInt64(ev.data.u64 >> 32))
+            let epollUserData = EPollUserData(rawValue: ev.data.u64)
+            let fd = epollUserData.fileDescriptor
+            let eventRegistrationID = epollUserData.registrationID
             switch fd {
             case self.eventFD:
                 var val = EventFd.eventfd_t()
@@ -191,7 +232,7 @@ extension Selector: _SelectorBackendProtocol {
             default:
                 // If the registration is not in the Map anymore we deregistered it during the processing of whenReady(...). In this case just skip it.
                 if let registration = registrations[Int(fd)] {
-                    guard eventSequenceIdentifier == registration.sequenceIdentifier else {
+                    guard eventRegistrationID == registration.registrationID else {
                         continue
                     }
 
@@ -247,5 +288,7 @@ extension Selector: _SelectorBackendProtocol {
         }
     }
 }
+
+#endif
 
 #endif

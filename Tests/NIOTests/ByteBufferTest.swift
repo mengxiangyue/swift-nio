@@ -1704,6 +1704,42 @@ class ByteBufferTest: XCTestCase {
         XCTAssertEqual(0xcc, slice.getInteger(at: 0, as: UInt8.self))
         XCTAssertEqual(0xdd, slice.getInteger(at: slice.writerIndex - 1, as: UInt8.self))
     }
+    
+    func testSliceOnSliceAfterHitting16MBMark() {
+        // This test ensures that a slice will get a new backing storage if its start is more than
+        // 16MiB after the originating backing storage.
+        
+        // create a buffer with 16MiB + 1 byte
+        let inputBufferLength = 16 * 1024 * 1024 + 1
+        var inputBuffer = ByteBufferAllocator().buffer(capacity: inputBufferLength)
+        inputBuffer.writeRepeatingByte(1, count: 8)
+        inputBuffer.writeRepeatingByte(2, count: inputBufferLength - 9)
+        inputBuffer.writeRepeatingByte(3, count: 1)
+        // read a small slice from the inputBuffer, to create an offset of eight bytes
+        XCTAssertEqual(inputBuffer.readInteger(as: UInt64.self), 0x0101010101010101)
+        
+        // read the remaining bytes into a new slice (this will have a length of 16MiB - 7Bbytes)
+        let remainingSliceLength = inputBufferLength - 8
+        XCTAssertEqual(inputBuffer.readableBytes, remainingSliceLength)
+        var remainingSlice = inputBuffer.readSlice(length: remainingSliceLength)!
+        
+        let finalSliceLength = 1
+        // let's create a new buffer that uses all but one byte
+        XCTAssertEqual(remainingSlice.readBytes(length: remainingSliceLength - finalSliceLength),
+                       Array<UInt8>(repeating: 2, count: remainingSliceLength - finalSliceLength))
+        
+        // there should only be one byte left.
+        XCTAssertEqual(remainingSlice.readableBytes, finalSliceLength)
+        
+        // with just one byte left, the last byte is exactly one byte above the 16MiB threshold.
+        // For this reason a slice of the last byte, will need to get a new backing storage.
+        let finalSlice = remainingSlice.readSlice(length: finalSliceLength)
+        XCTAssertNotEqual(finalSlice?.storagePointerIntegerValue(), remainingSlice.storagePointerIntegerValue())
+        XCTAssertEqual(finalSlice?.storageCapacity, 1)
+        XCTAssertEqual(finalSlice, ByteBuffer(integer: 3, as: UInt8.self))
+        
+        XCTAssertEqual(remainingSlice.readableBytes, 0)
+    }
 
     func testDiscardReadBytesOnConsumedBuffer() {
         var buffer = self.allocator.buffer(capacity: 8)
@@ -2803,6 +2839,117 @@ class ByteBufferTest: XCTestCase {
         let newBufferStorage = buffer.storagePointerIntegerValue()
         XCTAssertEqual(oldBufferStorage, newBufferStorage)
     }
+    
+    func testWithUnsafeMutableReadableBytesNoCoW() {
+        let storageID = self.buf.storagePointerIntegerValue()
+        self.buf.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual(0, ptr.count)
+        }
+
+        self.buf.writeString("hello \0 world!")
+        self.buf.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("hello \0 world!", String(decoding: ptr, as: UTF8.self))
+            ptr.copyBytes(from: "HELLO".utf8)
+        }
+        
+        XCTAssertEqual("HELLO \0", self.buf.readString(length: 7))
+        var slice = self.buf.getSlice(at: 8, length: 5) ?? ByteBuffer()
+        self.buf = ByteBuffer()
+        slice.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("world", String(decoding: ptr, as: UTF8.self))
+            ptr.copyBytes(from: "WORLD".utf8)
+        }
+        XCTAssertEqual("WORLD", String(buffer: slice))
+        XCTAssertEqual(storageID, slice.storagePointerIntegerValue() - 8)
+    }
+    
+    func testWithUnsafeMutableReadableBytesCoWOfNonSlice() {
+        let storageID = self.buf.storagePointerIntegerValue()
+        self.buf.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual(0, ptr.count)
+        }
+        
+        self.buf.writeWithUnsafeMutableBytes(minimumWritableBytes: 5) { ptr in
+            XCTAssertGreaterThanOrEqual(ptr.count, 5)
+            ptr.copyBytes(from: "hello".utf8)
+            return 5
+        }
+        
+        var slice = self.buf.getSlice(at: 2, length: 2) ?? ByteBuffer()
+        self.buf.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("hello", String(decoding: ptr, as: UTF8.self))
+            ptr.copyBytes(from: "HELLO".utf8)
+        }
+        XCTAssertNotEqual(storageID, self.buf.storagePointerIntegerValue())
+        XCTAssertEqual("ll", String(buffer: slice))
+        slice.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("ll", String(decoding: ptr, as: UTF8.self))
+            ptr.copyBytes(from: "XX".utf8)
+        }
+        XCTAssertEqual(storageID, slice.storagePointerIntegerValue() - 2)
+        XCTAssertNotEqual(self.buf.storagePointerIntegerValue(), slice.storagePointerIntegerValue() - 2)
+        XCTAssertEqual("XX", String(buffer: slice))
+    }
+    
+    func testWithUnsafeMutableReadableBytesCoWOfSlice() {
+        let storageID = self.buf.storagePointerIntegerValue()
+        self.buf.writeString("hello")
+        var slice = self.buf.getSlice(at: 2, length: 3) ?? ByteBuffer()
+        slice.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("llo", String(decoding: ptr, as: UTF8.self))
+            ptr.copyBytes(from: "foo".utf8)
+        }
+        XCTAssertNotEqual(storageID, slice.storagePointerIntegerValue() - 2)
+        XCTAssertEqual("hello", String(buffer: self.buf))
+        XCTAssertEqual("foo", String(buffer: slice))
+    }
+
+    func testWithUnsafeMutableReadableBytesAllThingsNonZero() {
+        var buf = self.allocator.buffer(capacity: 32)
+        let storageID = buf.storagePointerIntegerValue()
+
+        // We start with reader/writer/sliceBegin indices = 0
+        XCTAssertEqual(32, buf.capacity)
+        XCTAssertEqual(0, buf.readerIndex)
+        XCTAssertEqual(0, buf.writerIndex)
+
+        buf.writeString("0123456789abcdef")
+        XCTAssertEqual(32, buf.capacity)
+        XCTAssertEqual(0, buf.readerIndex)
+        XCTAssertEqual(16, buf.writerIndex)
+
+        XCTAssertEqual("012", buf.readString(length: 3))
+        XCTAssertEqual(32, buf.capacity)
+        XCTAssertEqual(3, buf.readerIndex)
+        XCTAssertEqual(16, buf.writerIndex)
+
+        buf.withUnsafeMutableReadableBytes { ptr in
+            ptr[ptr.endIndex - 1] = UInt8(ascii: "X")
+        }
+
+        var slice = buf.readSlice(length: 12) ?? ByteBuffer()
+        XCTAssertEqual("X", String(buffer: buf))
+
+        XCTAssertEqual(32, buf.capacity)
+        XCTAssertEqual(15, buf.readerIndex)
+        XCTAssertEqual(16, buf.writerIndex)
+
+        XCTAssertEqual(0, slice.readerIndex)
+        XCTAssertEqual(12, slice.writerIndex)
+        XCTAssertEqual("34567", slice.readString(length: 5))
+        XCTAssertEqual(5, slice.readerIndex)
+        XCTAssertEqual(12, slice.writerIndex)
+
+        buf = ByteBuffer() // make `slice` the owner of the storage
+        slice.withUnsafeMutableReadableBytes { ptr in
+            XCTAssertEqual("89abcde", String(decoding: ptr, as: UTF8.self))
+            XCTAssertEqual(7, ptr.count)
+            ptr.copyBytes(from: "7 bytes".utf8)
+        }
+
+        XCTAssertEqual(storageID, slice.storagePointerIntegerValue() - 3)
+        XCTAssertEqual("7 bytes", String(buffer: slice))
+    }
 }
 
 
@@ -2863,7 +3010,7 @@ private func testReserveCapacityLarger_memcpyHook(_ dst: UnsafeMutableRawPointer
 extension ByteBuffer {
     func storagePointerIntegerValue() -> UInt {
         var pointer: UInt = 0
-        self.withUnsafeReadableBytes { ptr in
+        self.withVeryUnsafeBytes { ptr in
             pointer = UInt(bitPattern: ptr.baseAddress!)
         }
         return pointer
