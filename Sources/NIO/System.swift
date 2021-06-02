@@ -596,6 +596,7 @@ internal enum KQueue {
 
     @inline(never)
     internal static func kqueue() throws -> CInt {
+        print("mxy------ create new kqueue")
         return try syscall(blocking: false) {
             Darwin.kqueue()
         }.result

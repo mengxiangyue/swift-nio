@@ -37,7 +37,7 @@ private final class EchoHandler: ChannelInboundHandler {
         if self.numBytes == 0 {
             let string = String(buffer: byteBuffer)
             print("Received: '\(string)' back from the server, closing channel.")
-            context.close(promise: nil)
+//            context.close(promise: nil)
         }
     }
 
@@ -58,7 +58,7 @@ let bootstrap = ClientBootstrap(group: group)
         channel.pipeline.addHandler(EchoHandler())
     }
 defer {
-    try! group.syncShutdownGracefully()
+//    try! group.syncShutdownGracefully()
 }
 
 // First argument is the program path
@@ -67,7 +67,7 @@ let arg1 = arguments.dropFirst().first
 let arg2 = arguments.dropFirst(2).first
 
 let defaultHost = "::1"
-let defaultPort: Int = 9999
+let defaultPort: Int = 9997
 
 enum ConnectTo {
     case ip(host: String, port: Int)

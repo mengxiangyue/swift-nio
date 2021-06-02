@@ -242,6 +242,7 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
                 readPending = false
                 result = .some
                 do {
+                    // 创建 一个 socket channel 然后读取对应的数据
                     let chan = try SocketChannel(socket: accepted,
                                                  parent: self,
                                                  eventLoop: group.next() as! SelectableEventLoop)

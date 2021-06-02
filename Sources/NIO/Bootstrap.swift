@@ -298,6 +298,7 @@ public final class ServerBootstrap {
 
         let serverChannel: ServerSocketChannel
         do {
+            // mxy 创建 server socket channel
             serverChannel = try makeServerChannel(eventLoop as! SelectableEventLoop, childEventLoopGroup)
         } catch {
             return eventLoop.makeFailedFuture(error)
@@ -353,6 +354,7 @@ public final class ServerBootstrap {
             func setupChildChannel() -> EventLoopFuture<Void> {
                 return self.childChannelOptions.applyAllChannelOptions(to: accepted).flatMap { () -> EventLoopFuture<Void> in
                     childEventLoop.assertInEventLoop()
+                    print("mxy ---111 \(type(of: accepted))")
                     return childChannelInit(accepted)
                 }
             }

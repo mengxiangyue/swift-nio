@@ -36,7 +36,7 @@ private final class EchoHandler: ChannelInboundHandler {
         context.close(promise: nil)
     }
 }
-let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+let group = MultiThreadedEventLoopGroup(numberOfThreads: 8)
 let bootstrap = ServerBootstrap(group: group)
     // Specify backlog and enable SO_REUSEADDR for the server itself
     .serverChannelOption(ChannelOptions.backlog, value: 256)
@@ -44,8 +44,9 @@ let bootstrap = ServerBootstrap(group: group)
 
     // Set the handlers that are appled to the accepted Channels
     .childChannelInitializer { channel in
+        print("mxy ---111 \(type(of: channel))")
         // Ensure we don't read faster than we can write by adding the BackPressureHandler into the pipeline.
-        channel.pipeline.addHandler(BackPressureHandler()).flatMap { v in
+        return channel.pipeline.addHandler(BackPressureHandler()).flatMap { v in
             channel.pipeline.addHandler(EchoHandler())
         }
     }
@@ -64,7 +65,7 @@ let arg1 = arguments.dropFirst().first
 let arg2 = arguments.dropFirst(2).first
 
 let defaultHost = "::1"
-let defaultPort = 9999
+let defaultPort = 9997
 
 enum BindTo {
     case ip(host: String, port: Int)
